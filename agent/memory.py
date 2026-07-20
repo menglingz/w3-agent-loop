@@ -35,6 +35,8 @@ class ConversationMemory:
     ) -> None:
         self.client = client
         self.model = model
+        if keep_recent < 1:
+            raise ValueError("keep_recent 必须大于等于 1")
         self.max_messages = max_messages
         self.keep_recent = keep_recent
         self.messages: list[MessageParam] = []
@@ -52,9 +54,12 @@ class ConversationMemory:
         if len(self.messages) <= self.max_messages:
             return False
 
-        # 切分：要被摘要的旧消息 vs 原样保留的近期消息
-        to_summarize = self.messages[: -self.keep_recent]
-        recent = self.messages[-self.keep_recent :]
+        # 先按消息数计算候选边界，再向前调整到完整工具交互的边界。
+        boundary = _safe_compaction_boundary(self.messages, len(self.messages) - self.keep_recent)
+        if boundary <= 0:
+            return False
+        to_summarize = self.messages[:boundary]
+        recent = self.messages[boundary:]
 
         # 把旧消息拍平成纯文本喂给模型做摘要
         transcript = _flatten_messages(to_summarize)
@@ -81,6 +86,50 @@ class ConversationMemory:
         )
         parts = [b.text for b in resp.content if b.type == "text"]
         return "\n".join(parts).strip() or "(无可摘要内容)"
+
+
+def _block_value(block: Any, key: str) -> Any:
+    """读取 SDK block 或 dict block 的统一字段。"""
+    if isinstance(block, dict):
+        return block.get(key)
+    return getattr(block, key, None)
+
+
+def _blocks(content: Any) -> list[Any]:
+    if isinstance(content, (list, tuple)):
+        return list(content)
+    return []
+
+
+def _safe_compaction_boundary(
+    messages: list[MessageParam],
+    candidate: int,
+) -> int:
+    """将候选切点向前移动，避免拆开 tool_use/tool_result 配对。"""
+    tool_use_positions: dict[str, int] = {}
+    for index, message in enumerate(messages):
+        for block in _blocks(message["content"]):
+            if _block_value(block, "type") != "tool_use":
+                continue
+            tool_use_id = _block_value(block, "id")
+            if tool_use_id:
+                tool_use_positions[tool_use_id] = index
+
+    boundary = candidate
+    while boundary > 0:
+        adjusted = False
+        for result_index in range(boundary, len(messages)):
+            for block in _blocks(messages[result_index]["content"]):
+                if _block_value(block, "type") != "tool_result":
+                    continue
+                tool_use_id = _block_value(block, "tool_use_id")
+                use_index = tool_use_positions.get(tool_use_id)
+                if use_index is not None and use_index < boundary:
+                    boundary = use_index
+                    adjusted = True
+        if not adjusted:
+            break
+    return boundary
 
 
 def _flatten_messages(messages: list[MessageParam]) -> str:
