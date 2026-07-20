@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Callable, Generic, TypeVar
 
 
@@ -16,6 +17,17 @@ from anthropic.types import ToolParam
 from pydantic import BaseModel, ValidationError
 
 A = TypeVar("A", bound=BaseModel)
+
+
+class ToolPermission(str, Enum):
+    """工具访问的能力类别，由 Policy 决定是否允许。"""
+
+    READ = "read"
+    WRITE = "write"
+    DELETE = "delete"
+    NETWORK = "network"
+    PROCESS = "process"
+    SENSITIVE = "sensitive"
 
 
 class Tool(Generic[A]):
@@ -26,6 +38,7 @@ class Tool(Generic[A]):
         description: 给模型看的说明，写清楚「什么时候该用它」。
         args_model: 描述参数的 pydantic 模型，用于生成 schema 和校验。
         func: 真正的本地实现，接收校验后的参数模型实例，返回字符串结果。
+        permission: 工具需要的权限类别，默认是只读。
     """
 
     def __init__(
@@ -34,11 +47,13 @@ class Tool(Generic[A]):
         description: str,
         args_model: type[A],
         func: Callable[[A], str],
+        permission: ToolPermission = ToolPermission.READ,
     ) -> None:
         self.name = name
         self.description = description
         self.args_model = args_model
         self.func = func
+        self.permission = permission
 
     def to_anthropic_schema(self) -> ToolParam:
         """转成 Anthropic tools 数组里需要的声明格式。

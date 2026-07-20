@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import Agent
+from agent import Agent, ApprovalRequest, ToolPolicy
 
 # 精心设计的任务，分别诱导不同工具与多步组合
 TASKS = [
@@ -25,13 +25,22 @@ TASKS = [
 ]
 
 
+def approve_demo_tool(request: ApprovalRequest) -> bool:
+    """Demo 中的副作用任务由入口显式授权，避免依赖隐含默认值。"""
+    print(f"🔐 Demo 自动批准 {request.tool_name} 的 {request.permission.value} 权限")
+    return True
+
+
 def main() -> None:
 
     for i, task in enumerate(TASKS, 1):
         print("=" * 70)
         print(f"任务 {i}：{task}")
         print("-" * 70)
-        agent = Agent(verbose=True)  # 每个任务独立 Agent，避免上下文串味
+        agent = Agent(
+            verbose=True,
+            policy=ToolPolicy(approver=approve_demo_tool),
+        )  # 每个任务独立 Agent，避免上下文串味
         answer = agent.run(task)
         print(f"\n✅ 最终答案：{answer}\n")
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from .base import Tool
+from .base import Tool, ToolPermission
 
 # 沙箱根目录：所有文件操作都被关在这里面
 WORKSPACE = (Path(__file__).resolve().parents[2] / "workspace").resolve()
@@ -94,6 +94,7 @@ write_file_tool = Tool(
     description="把文本内容写入 workspace 沙箱内的文件（覆盖写）。",
     args_model=WriteFileArgs,
     func=_write_file,
+    permission=ToolPermission.WRITE,
 )
 
 
@@ -135,4 +136,5 @@ delete_file_tool = Tool(
     ),
     args_model=DeleteFileArgs,
     func=_delete_file,
+    permission=ToolPermission.DELETE,
 )

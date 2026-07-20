@@ -22,6 +22,7 @@ from typing import Any
 import anthropic
 
 from .memory import ConversationMemory
+from .policy import ToolPolicy
 from .tools import ToolRegistry, build_default_registry
 
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "")
@@ -40,6 +41,7 @@ class Agent:
         model: 使用的模型 id。
         max_steps: 单次 run 内最多的「模型↔工具」往返步数，防死循环。
         verbose: 是否打印每一步的思考/工具调用过程（教学用，建议开）。
+        policy: 工具权限策略；未提供时危险权限默认需要审批并 fail closed。
     """
 
     def __init__(
@@ -49,6 +51,7 @@ class Agent:
         verbose: bool = True,
         registry: ToolRegistry | None = None,
         client: anthropic.Anthropic | None = None,
+        policy: ToolPolicy | None = None,
     ) -> None:
         self.client = client if client is not None else anthropic.Anthropic(
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
@@ -58,6 +61,7 @@ class Agent:
         self.max_steps = max_steps
         self.verbose = verbose
         self.registry = registry if registry is not None else build_default_registry()
+        self.policy = policy if policy is not None else ToolPolicy()
         self.memory = ConversationMemory(self.client, model=model)
 
     def _log(self, msg: str) -> None:
@@ -99,21 +103,34 @@ class Agent:
                 if block.type != "tool_use":
                     continue
                 tool = self.registry.get(block.name)
+                is_error = False
                 if tool is None:
                     # 健壮性：模型请求了不存在的工具，回传错误让它换路
                     result = f"未知工具：{block.name}"
                     self._log(f"⚠️  {result}")
                 else:
-                    self._log(f"🔧 调用 {block.name}({block.input})")
-                    result = tool.run(block.input)  # base.run 已内含参数校验与异常兜底
-                    self._log(f"   ↳ {result[:200]}")
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    }
-                )
+                    decision = self.policy.authorize(
+                        tool_use_id=block.id,
+                        tool_name=block.name,
+                        permission=tool.permission,
+                        arguments=block.input,
+                    )
+                    if not decision.allowed:
+                        result = f"工具执行被拒绝：{decision.reason}"
+                        is_error = True
+                        self._log(f"🔒 {result}")
+                    else:
+                        self._log(f"🔧 调用 {block.name}({block.input})")
+                        result = tool.run(block.input)  # base.run 已内含参数校验与异常兜底
+                        self._log(f"   ↳ {result[:200]}")
+                tool_result: dict[str, Any] = {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                }
+                if is_error:
+                    tool_result["is_error"] = True
+                tool_results.append(tool_result)
 
             # 健壮性：stop_reason 说要调用工具，但 content 里没有实际的 tool_use block
             # （模型输出不一致的小概率异常）。此时不能回填空 tool_results（等价于给模型发一条空消息，

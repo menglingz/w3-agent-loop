@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import Agent
+from agent import Agent, ApprovalRequest, ToolPolicy
 
 
 # 引入 readline 以启用行编辑（方向键、历史、退格等）。导入即生效，无需直接调用。
@@ -27,10 +27,26 @@ except ImportError:  # 某些平台（如 Windows 原生）无此模块，忽略
 PROMPT = "\001\002🧑\001\002 " if readline else "🧑 "
 
 
+def console_approve(request: ApprovalRequest) -> bool:
+    """在终端确认一次受保护的工具调用，任何异常都按拒绝处理。"""
+    arguments = repr(request.arguments)
+    if len(arguments) > 300:
+        arguments = arguments[:300] + "..."
+    print(
+        f"\n🔐 工具 {request.tool_name} 请求 {request.permission.value} 权限\n"
+        f"   参数：{arguments}"
+    )
+    try:
+        answer = input("   允许执行？[y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n   已拒绝")
+        return False
+    return answer in {"y", "yes"}
+
 
 def main() -> None:
 
-    agent = Agent(verbose=True)
+    agent = Agent(verbose=True, policy=ToolPolicy(approver=console_approve))
     print(f"🤖 Agent 已就绪，注册了 {len(agent.registry)} 个工具。")
     print("   直接提问，Agent 会自行决定是否调用工具。输入 /exit 退出，/reset 清空记忆。\n")
 

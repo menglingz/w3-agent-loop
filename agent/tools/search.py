@@ -11,7 +11,7 @@ import os
 import httpx
 from pydantic import BaseModel, Field
 
-from .base import Tool
+from .base import Tool, ToolPermission
 
 
 class SearchArgs(BaseModel):
@@ -54,4 +54,5 @@ search_tool = Tool(
     description="联网搜索实时或外部信息。当问题需要你不掌握的最新事实、新闻、文档时使用。",
     args_model=SearchArgs,
     func=_run,
+    permission=ToolPermission.NETWORK,
 )

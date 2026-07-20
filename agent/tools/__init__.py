@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import Tool, ToolRegistry
+from .base import Tool, ToolPermission, ToolRegistry
 from .calculator import calculator_tool
 from .clock import now_tool
 from .files import list_dir_tool, read_file_tool, write_file_tool, delete_file_tool
@@ -25,4 +25,4 @@ def build_default_registry() -> ToolRegistry:
     return registry
 
 
-__all__ = ["Tool", "ToolRegistry", "build_default_registry"]
+__all__ = ["Tool", "ToolPermission", "ToolRegistry", "build_default_registry"]
