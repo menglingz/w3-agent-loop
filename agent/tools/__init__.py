@@ -1,10 +1,11 @@
 """工具包导出：组装一个注册好全部工具的 ToolRegistry。"""
+
 from __future__ import annotations
 
 from .base import Tool, ToolRegistry
 from .calculator import calculator_tool
 from .clock import now_tool
-from .files import list_dir_tool, read_file_tool, write_file_tool
+from .files import list_dir_tool, read_file_tool, write_file_tool, delete_file_tool
 from .search import search_tool
 
 
@@ -18,6 +19,7 @@ def build_default_registry() -> ToolRegistry:
         list_dir_tool,
         read_file_tool,
         write_file_tool,
+        delete_file_tool,
     ):
         registry.register(tool)
     return registry

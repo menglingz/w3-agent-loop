@@ -4,6 +4,7 @@
   任何试图越界（路径逃逸到 ../../ 之外）的访问都会被拒绝。
   这演示了「工具是 Agent 的攻击面，必须做权限边界」——阶段六会系统展开。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -93,4 +94,45 @@ write_file_tool = Tool(
     description="把文本内容写入 workspace 沙箱内的文件（覆盖写）。",
     args_model=WriteFileArgs,
     func=_write_file,
+)
+
+
+class DeleteFileArgs(BaseModel):
+    path: str = Field(description="相对 workspace 的文件路径")
+    confirm: bool = Field(
+        default=False,
+        description="二次确认是否删除，必须明确为True的时候才执行删除操作",
+    )
+
+
+def _delete_file(args: DeleteFileArgs) -> str:
+    target = _resolve_in_sandbox(args.path)
+    if target.is_dir():
+        return f"该工具只能删除文件，不可以删除文件夹: {args.path}"
+
+    if not args.confirm:
+        return "请明确确认需要删除文件后再执行"
+
+    if not target.is_file():
+        return f"文件不存在: {args.path}"
+
+    text = target.read_text(encoding="utf-8", errors="replace")
+    content = (
+        text[:4000] + f"\n…（已截断，文件共 {len(text)} 字符）"
+        if len(text) > 4000
+        else text
+    )
+    target.unlink()
+    return f"已删除文件: {args.path}， 删除文件内容为: {content}"
+
+
+delete_file_tool = Tool(
+    name="delete_file",
+    description=(
+        "删除单个文件，必须明确让用户二次确认后才可真正执行，否则不执行删除操作"
+        "此工具不能删除目录，也不应被用来清空目录内容作为删除目录的替代方案——"
+        "如需删除目录请直接告知用户当前不支持，不要自行删除目录下的文件。"
+    ),
+    args_model=DeleteFileArgs,
+    func=_delete_file,
 )

@@ -13,6 +13,7 @@
   - 记忆：每轮结束后检查是否需要压缩上下文。
   - 可观测：把「模型在想什么、调了什么工具、结果如何」打印出来（阶段六会升级为结构化 trace）。
 """
+
 from __future__ import annotations
 
 import os
@@ -23,7 +24,7 @@ import anthropic
 from .memory import ConversationMemory
 from .tools import ToolRegistry, build_default_registry
 
-DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", '')
+DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "")
 
 SYSTEM_PROMPT = (
     "你是一个会使用工具的助理。遵循 ReAct 思路：先想清楚要不要用工具、用哪个，"
@@ -112,6 +113,18 @@ class Agent:
                         "content": result,
                     }
                 )
+
+            # 健壮性：stop_reason 说要调用工具，但 content 里没有实际的 tool_use block
+            # （模型输出不一致的小概率异常）。此时不能回填空 tool_results（等价于给模型发一条空消息，
+            # 会导致它困惑并陷入重复提问的循环），直接把它已经说出的文字当最终答案返回。
+            if not tool_results:
+                self._log("⚠️   模型声称调用工具但未实际请求，提示其重新决定")
+                self.memory.add(
+                    "user",
+                    "系统提示：你上一步返回了 stop_reason=tool_use，但没有实际发起任何工具调用。"
+                    "请重新决定：如果需要用工具就正确发起调用，如果不需要就直接给出文字回答。",
+                )
+                continue
 
             # 工具结果作为一条 user 消息回填，进入下一轮
             self.memory.add("user", tool_results)

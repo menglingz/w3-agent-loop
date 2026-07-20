@@ -10,9 +10,10 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
+from anthropic.types import MessageParam
 
 
 class ConversationMemory:
@@ -36,9 +37,9 @@ class ConversationMemory:
         self.model = model
         self.max_messages = max_messages
         self.keep_recent = keep_recent
-        self.messages: list[dict[str, Any]] = []
+        self.messages: list[MessageParam] = []
 
-    def add(self, role: str, content: Any) -> None:
+    def add(self, role: Literal["user", "assistant"], content: Any) -> None:
         """追加一条消息（content 可以是字符串或 content block 列表）。"""
         self.messages.append({"role": role, "content": content})
 
@@ -60,7 +61,7 @@ class ConversationMemory:
         summary = self._summarize(transcript)
 
         # 用一条 user 消息承载摘要，替换掉一大段历史
-        compacted: list[dict[str, Any]] = [
+        compacted: list[MessageParam] = [
             {
                 "role": "user",
                 "content": f"【以下是早前对话的摘要，供你保持上下文】\n{summary}",
@@ -82,7 +83,7 @@ class ConversationMemory:
         return "\n".join(parts).strip() or "(无可摘要内容)"
 
 
-def _flatten_messages(messages: list[dict[str, Any]]) -> str:
+def _flatten_messages(messages: list[MessageParam]) -> str:
     """把 messages（含 tool_use / tool_result block）拍平成可读文本，供摘要使用。"""
     lines: list[str] = []
     for m in messages:
@@ -93,13 +94,19 @@ def _flatten_messages(messages: list[dict[str, Any]]) -> str:
             continue
         # content 是 block 列表：分别处理文本 / 工具调用 / 工具结果
         for block in content:
-            btype = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
-            if btype == "text":
-                text = block["text"] if isinstance(block, dict) else block.text
-                lines.append(f"{role}: {text}")
-            elif btype == "tool_use":
-                name = block["name"] if isinstance(block, dict) else block.name
-                lines.append(f"{role}: [调用工具 {name}]")
-            elif btype == "tool_result":
+            if isinstance(block, dict):
+                if block["type"] == "text":
+                    lines.append(f'{role}: {block["text"]}')
+                elif block["type"] == "tool_use":
+                    lines.append(f'{role}: [调用工具 {block["name"]}]')
+                elif block["type"] == "tool_result":
+                    lines.append(f"{role}: [工具返回结果]")
+                continue
+
+            if block.type == "text":
+                lines.append(f"{role}: {block.text}")
+            elif block.type == "tool_use":
+                lines.append(f"{role}: [调用工具 {block.name}]")
+            elif block.type == "tool_result":
                 lines.append(f"{role}: [工具返回结果]")
     return "\n".join(lines)

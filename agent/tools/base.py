@@ -6,15 +6,19 @@
     又能在执行前对模型填的参数做校验（非法时报错让模型重试）—— 这就是「约束不确定性」。
   - 注册表统一管理所有工具，Agent Loop 只跟注册表打交道，新增工具零侵入。
 """
+
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Generic, TypeVar
+
 
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ValidationError
 
+A = TypeVar("A", bound=BaseModel)
 
-class Tool:
+
+class Tool(Generic[A]):
     """一个工具 = 元信息 + pydantic 参数模型 + 本地执行函数。
 
     Args:
@@ -28,8 +32,8 @@ class Tool:
         self,
         name: str,
         description: str,
-        args_model: type[BaseModel],
-        func: Callable[[BaseModel], str],
+        args_model: type[A],
+        func: Callable[[A], str],
     ) -> None:
         self.name = name
         self.description = description
@@ -71,12 +75,12 @@ class ToolRegistry:
     """工具注册表：集中持有所有工具，供 Agent Loop 查询与调用。"""
 
     def __init__(self) -> None:
-        self._tools: dict[str, Tool] = {}
+        self._tools: dict[str, Tool[Any]] = {}
 
-    def register(self, tool: Tool) -> None:
+    def register(self, tool: Tool[Any]) -> None:
         self._tools[tool.name] = tool
 
-    def get(self, name: str) -> Tool | None:
+    def get(self, name: str) -> Tool[Any] | None:
         return self._tools.get(name)
 
     def anthropic_schemas(self) -> list[ToolParam]:

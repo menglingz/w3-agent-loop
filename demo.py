@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from agent import Agent
 
 # 精心设计的任务，分别诱导不同工具与多步组合
@@ -24,7 +26,6 @@ TASKS = [
 
 
 def main() -> None:
-    load_dotenv()
 
     for i, task in enumerate(TASKS, 1):
         print("=" * 70)
