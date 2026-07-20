@@ -48,15 +48,16 @@ class Agent:
         max_steps: int = 8,
         verbose: bool = True,
         registry: ToolRegistry | None = None,
+        client: anthropic.Anthropic | None = None,
     ) -> None:
-        self.client = anthropic.Anthropic(
+        self.client = client if client is not None else anthropic.Anthropic(
             api_key=os.environ.get("ANTHROPIC_API_KEY"),
             base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
         )
         self.model = model
         self.max_steps = max_steps
         self.verbose = verbose
-        self.registry = registry or build_default_registry()
+        self.registry = registry if registry is not None else build_default_registry()
         self.memory = ConversationMemory(self.client, model=model)
 
     def _log(self, msg: str) -> None:
