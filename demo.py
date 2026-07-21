@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import Agent, ApprovalRequest, ToolPolicy
+from agent import Agent, ApprovalRequest, ToolPolicy, console_event_listener
 
 # 精心设计的任务，分别诱导不同工具与多步组合
 TASKS = [
@@ -38,8 +38,9 @@ def main() -> None:
         print(f"任务 {i}：{task}")
         print("-" * 70)
         agent = Agent(
-            verbose=True,
+            verbose=False,
             policy=ToolPolicy(approver=approve_demo_tool),
+            listeners=[console_event_listener],
         )  # 每个任务独立 Agent，避免上下文串味
         answer = agent.run(task)
         print(f"\n✅ 最终答案：{answer}\n")

@@ -1,29 +1,29 @@
 """Agent 核心：手写的 Agent Loop（不依赖任何 Agent 框架）。
 
-★ 这是阶段二最该吃透的文件。一句话概括 Agent Loop：
-
-    while 模型还在请求工具:
-        把对话发给模型
-        模型回复里若有 tool_use → 本地执行对应工具 → 把结果作为 tool_result 回填
-    模型不再请求工具 → 输出最终文本答案
-
-围绕这个循环，工程上还要处理：
-  - 多工具：一轮可能请求多个工具，要逐个执行后一起回填。
-  - 健壮性：未知工具、参数非法、工具异常都要回传给模型而非崩溃；加步数上限防死循环。
-  - 记忆：每轮结束后检查是否需要压缩上下文。
-  - 可观测：把「模型在想什么、调了什么工具、结果如何」打印出来（阶段六会升级为结构化 trace）。
+循环持续把对话发送给模型，执行模型请求的工具，再把 tool_result 回填，
+直到模型给出最终文本。工程边界包括步数上限、工具权限、上下文压缩和结构化事件。
 """
 
 from __future__ import annotations
-
+import json
 import os
-from typing import Any
+from datetime import datetime, timezone
+from time import perf_counter
+from typing import Any, Callable, Iterable
+from uuid import uuid4
 
 import anthropic
 
+from .events import (
+    AgentEvent,
+    EventListener,
+    EventType,
+    console_event_listener,
+    summarize_for_event,
+)
 from .memory import ConversationMemory
-from .policy import ToolPolicy
-from .tools import ToolRegistry, build_default_registry
+from .policy import PolicyAction, ToolPolicy
+from .tools import ToolPermission, ToolRegistry, build_default_registry
 
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "")
 
@@ -33,16 +33,21 @@ SYSTEM_PROMPT = (
     "拿到结果后再继续推理，最终用简洁中文回答。不要编造工具能查到的事实。"
 )
 
+RunIdFactory = Callable[[], str]
+Clock = Callable[[], datetime]
+Timer = Callable[[], float]
+
+
+def _default_run_id() -> str:
+    return uuid4().hex
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 class Agent:
-    """封装 Anthropic 客户端、工具注册表、记忆与 Agent Loop。
-
-    Args:
-        model: 使用的模型 id。
-        max_steps: 单次 run 内最多的「模型↔工具」往返步数，防死循环。
-        verbose: 是否打印每一步的思考/工具调用过程（教学用，建议开）。
-        policy: 工具权限策略；未提供时危险权限默认需要审批并 fail closed。
-    """
+    """封装 Anthropic 客户端、工具、权限策略、记忆与 Agent Loop。"""
 
     def __init__(
         self,
@@ -52,10 +57,18 @@ class Agent:
         registry: ToolRegistry | None = None,
         client: anthropic.Anthropic | None = None,
         policy: ToolPolicy | None = None,
+        listeners: Iterable[EventListener] | None = None,
+        run_id_factory: RunIdFactory | None = None,
+        clock: Clock | None = None,
+        timer: Timer | None = None,
     ) -> None:
-        self.client = client if client is not None else anthropic.Anthropic(
-            api_key=os.environ.get("ANTHROPIC_API_KEY"),
-            base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
+        self.client = (
+            client
+            if client is not None
+            else anthropic.Anthropic(
+                api_key=os.environ.get("ANTHROPIC_API_KEY"),
+                base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
+            )
         )
         self.model = model
         self.max_steps = max_steps
@@ -63,16 +76,86 @@ class Agent:
         self.registry = registry if registry is not None else build_default_registry()
         self.policy = policy if policy is not None else ToolPolicy()
         self.memory = ConversationMemory(self.client, model=model)
+        configured_listeners = list(listeners or ())
+        if verbose:
+            configured_listeners.append(console_event_listener)
+        self.listeners = tuple(configured_listeners)
+        self.run_id_factory = run_id_factory or _default_run_id
+        self.clock = clock or _utc_now
+        self.timer = timer or perf_counter
 
-    def _log(self, msg: str) -> None:
-        if self.verbose:
-            print(msg)
+    def _emit(
+        self,
+        event_type: EventType,
+        run_id: str,
+        *,
+        step: int | None = None,
+        tool_name: str | None = None,
+        tool_use_id: str | None = None,
+        input_summary: str | None = None,
+        output_summary: str | None = None,
+        error: str | None = None,
+        duration_ms: float | None = None,
+    ) -> AgentEvent:
+        event = AgentEvent(
+            event_type=event_type,
+            run_id=run_id,
+            timestamp=self.clock(),
+            step=step,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            input_summary=input_summary,
+            output_summary=output_summary,
+            error=error,
+            duration_ms=duration_ms,
+        )
+        for listener in self.listeners:
+            try:
+                listener(event)
+            except Exception:
+                # 可观测组件不能改变 Agent 的业务控制流。
+                continue
+        return event
+
+    def _duration_ms(self, started_at: float) -> float:
+        return max(0.0, (self.timer() - started_at) * 1000)
+
+    def _finish(self, run_id: str, started_at: float, answer: str) -> str:
+        self._emit(
+            EventType.RUN_FINISHED,
+            run_id,
+            output_summary=summarize_for_event(answer),
+            duration_ms=self._duration_ms(started_at),
+        )
+        return answer
 
     def run(self, user_input: str) -> str:
         """处理一轮用户输入，内部可能多次往返工具，返回最终文本答案。"""
+        run_id = self.run_id_factory()
+        run_started_at = self.timer()
+        self._emit(
+            EventType.RUN_STARTED,
+            run_id,
+            input_summary=summarize_for_event(user_input),
+        )
+        try:
+            return self._run_loop(user_input, run_id, run_started_at)
+        except Exception as exc:
+            self._emit(
+                EventType.RUN_FAILED,
+                run_id,
+                error=summarize_for_event(f"{type(exc).__name__}: {exc}"),
+                duration_ms=self._duration_ms(run_started_at),
+            )
+            raise
+
+    def _run_loop(self, user_input: str, run_id: str, run_started_at: float) -> str:
         self.memory.add("user", user_input)
 
-        for step in range(self.max_steps):
+        for step_index in range(self.max_steps):
+            step = step_index + 1
+            self._emit(EventType.MODEL_REQUESTED, run_id, step=step)
+            model_started_at = self.timer()
             resp = self.client.messages.create(
                 model=self.model,
                 max_tokens=1024,
@@ -80,49 +163,135 @@ class Agent:
                 tools=self.registry.anthropic_schemas(),
                 messages=self.memory.messages,
             )
+            self._emit(
+                EventType.MODEL_RESPONSE_RECEIVED,
+                run_id,
+                step=step,
+                output_summary=f"stop_reason={resp.stop_reason}",
+                duration_ms=self._duration_ms(model_started_at),
+            )
 
-            # 把模型这一轮输出（可能含 tool_use）原样存入记忆
+            # 模型输出可能同时包含文字和多个 tool_use，必须原样保存在历史中。
             self.memory.add("assistant", resp.content)
-
-            # 打印模型这一步说的文字（它的「思考/解释」）
             for block in resp.content:
                 if block.type == "text" and block.text.strip():
-                    self._log(f"💭 {block.text.strip()}")
+                    self._emit(
+                        EventType.MODEL_TEXT_RECEIVED,
+                        run_id,
+                        step=step,
+                        output_summary=summarize_for_event(block.text.strip()),
+                    )
 
-            # stop_reason != tool_use → 模型给出了最终答案，结束循环
             if resp.stop_reason != "tool_use":
-                final = "".join(b.text for b in resp.content if b.type == "text")
-                # 一轮对话结束后，按需压缩历史
+                final = "".join(
+                    b.text for b in resp.content if b.type == "text"
+                ).strip()
+                compact_started_at = self.timer()
                 if self.memory.maybe_compact():
-                    self._log("🗜️  上下文较长，已自动摘要压缩早期对话")
-                return final.strip()
+                    self._emit(
+                        EventType.CONTEXT_COMPACTED,
+                        run_id,
+                        step=step,
+                        duration_ms=self._duration_ms(compact_started_at),
+                    )
+                return self._finish(run_id, run_started_at, final)
 
-            # 否则：逐个执行被请求的工具，收集 tool_result
             tool_results: list[dict[str, Any]] = []
             for block in resp.content:
                 if block.type != "tool_use":
                     continue
+                tool_started_at = self.timer()
                 tool = self.registry.get(block.name)
+                input_summary = summarize_for_event(block.input)
                 is_error = False
+
                 if tool is None:
-                    # 健壮性：模型请求了不存在的工具，回传错误让它换路
                     result = f"未知工具：{block.name}"
-                    self._log(f"⚠️  {result}")
+                    self._emit(
+                        EventType.TOOL_CALL_FAILED,
+                        run_id,
+                        step=step,
+                        tool_name=block.name,
+                        tool_use_id=block.id,
+                        input_summary=input_summary,
+                        error=result,
+                        duration_ms=self._duration_ms(tool_started_at),
+                    )
                 else:
+                    sensitive = tool.permission == ToolPermission.SENSITIVE
+                    input_summary = summarize_for_event(
+                        block.input, sensitive=sensitive
+                    )
+                    action = self.policy.action_for(tool.permission)
+                    approval_started_at = self.timer()
+                    if action == PolicyAction.ASK:
+                        self._emit(
+                            EventType.APPROVAL_REQUESTED,
+                            run_id,
+                            step=step,
+                            tool_name=block.name,
+                            tool_use_id=block.id,
+                            input_summary=input_summary,
+                        )
                     decision = self.policy.authorize(
                         tool_use_id=block.id,
                         tool_name=block.name,
                         permission=tool.permission,
                         arguments=block.input,
                     )
+                    if action == PolicyAction.ASK:
+                        self._emit(
+                            EventType.APPROVAL_RESOLVED,
+                            run_id,
+                            step=step,
+                            tool_name=block.name,
+                            tool_use_id=block.id,
+                            output_summary=summarize_for_event(decision.reason),
+                            duration_ms=self._duration_ms(approval_started_at),
+                        )
+
                     if not decision.allowed:
                         result = f"工具执行被拒绝：{decision.reason}"
                         is_error = True
-                        self._log(f"🔒 {result}")
+                        self._emit(
+                            EventType.TOOL_CALL_FAILED,
+                            run_id,
+                            step=step,
+                            tool_name=block.name,
+                            tool_use_id=block.id,
+                            input_summary=input_summary,
+                            error=summarize_for_event(result),
+                            duration_ms=self._duration_ms(tool_started_at),
+                        )
                     else:
-                        self._log(f"🔧 调用 {block.name}({block.input})")
-                        result = tool.run(block.input)  # base.run 已内含参数校验与异常兜底
-                        self._log(f"   ↳ {result[:200]}")
+                        self._emit(
+                            EventType.TOOL_CALL_STARTED,
+                            run_id,
+                            step=step,
+                            tool_name=block.name,
+                            tool_use_id=block.id,
+                            input_summary=input_summary,
+                        )
+                        execution_started_at = self.timer()
+                        outcome = tool.execute(block.input)
+                        result = outcome.content
+                        event_type = (
+                            EventType.TOOL_CALL_FINISHED
+                            if outcome.ok
+                            else EventType.TOOL_CALL_FAILED
+                        )
+                        summary = summarize_for_event(result, sensitive=sensitive)
+                        self._emit(
+                            event_type,
+                            run_id,
+                            step=step,
+                            tool_name=block.name,
+                            tool_use_id=block.id,
+                            output_summary=summary if outcome.ok else None,
+                            error=None if outcome.ok else summary,
+                            duration_ms=self._duration_ms(execution_started_at),
+                        )
+
                 tool_result: dict[str, Any] = {
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -132,11 +301,14 @@ class Agent:
                     tool_result["is_error"] = True
                 tool_results.append(tool_result)
 
-            # 健壮性：stop_reason 说要调用工具，但 content 里没有实际的 tool_use block
-            # （模型输出不一致的小概率异常）。此时不能回填空 tool_results（等价于给模型发一条空消息，
-            # 会导致它困惑并陷入重复提问的循环），直接把它已经说出的文字当最终答案返回。
             if not tool_results:
-                self._log("⚠️   模型声称调用工具但未实际请求，提示其重新决定")
+                error = "模型声称调用工具但未实际请求，提示其重新决定"
+                self._emit(
+                    EventType.MODEL_RESPONSE_INVALID,
+                    run_id,
+                    step=step,
+                    error=error,
+                )
                 self.memory.add(
                     "user",
                     "系统提示：你上一步返回了 stop_reason=tool_use，但没有实际发起任何工具调用。"
@@ -144,7 +316,14 @@ class Agent:
                 )
                 continue
 
-            # 工具结果作为一条 user 消息回填，进入下一轮
             self.memory.add("user", tool_results)
 
-        return "（已达到最大步数上限，未能得出最终答案——可能陷入工具循环，建议检查工具描述或提高 max_steps）"
+        answer = "（已达到最大步数上限，未能得出最终答案——可能陷入工具循环，建议检查工具描述或提高 max_steps）"
+        self._emit(
+            EventType.RUN_FAILED,
+            run_id,
+            error="达到最大步数上限",
+            output_summary=summarize_for_event(answer),
+            duration_ms=self._duration_ms(run_started_at),
+        )
+        return answer

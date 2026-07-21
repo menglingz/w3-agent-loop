@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Generic, TypeVar
 
@@ -28,6 +29,12 @@ class ToolPermission(str, Enum):
     NETWORK = "network"
     PROCESS = "process"
     SENSITIVE = "sensitive"
+
+
+@dataclass(frozen=True)
+class ToolExecutionResult:
+    ok: bool
+    content: str
 
 
 class Tool(Generic[A]):
@@ -70,20 +77,23 @@ class Tool(Generic[A]):
             "input_schema": schema,
         }
 
-    def run(self, raw_input: dict[str, Any]) -> str:
-        """校验模型填的参数后执行。
-
-        校验失败不抛异常，而是返回错误字符串 —— 它会被当作 tool_result 回填给模型，
-        模型据此自我修正后重试，这正是 Agent 健壮性的关键。
-        """
+    def execute(self, raw_input: dict[str, Any]) -> ToolExecutionResult:
+        """校验参数并执行，同时保留成功/失败状态供事件系统使用。"""
         try:
             args = self.args_model(**raw_input)
         except ValidationError as e:
-            return f"参数校验失败：{e.errors()}。请修正参数后重试。"
+            return ToolExecutionResult(
+                False,
+                f"参数校验失败：{e.errors()}。请修正参数后重试。",
+            )
         try:
-            return self.func(args)
-        except Exception as e:  # 工具内部异常也回传给模型，而非让整个 Loop 崩溃
-            return f"工具执行出错：{type(e).__name__}: {e}"
+            return ToolExecutionResult(True, self.func(args))
+        except Exception as e:  # 工具内部异常回传给模型，而非让整个 Loop 崩溃
+            return ToolExecutionResult(False, f"工具执行出错：{type(e).__name__}: {e}")
+
+    def run(self, raw_input: dict[str, Any]) -> str:
+        """兼容原接口：只返回可直接回填模型的字符串。"""
+        return self.execute(raw_input).content
 
 
 class ToolRegistry:

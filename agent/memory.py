@@ -8,6 +8,7 @@
 这不是最优算法，但足以让你理解「记忆 = 可被压缩/检索的上下文」这一核心观念。
 真实系统里会用更复杂的分层记忆 + 向量检索（阶段三 RAG 会接上）。
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -55,7 +56,9 @@ class ConversationMemory:
             return False
 
         # 先按消息数计算候选边界，再向前调整到完整工具交互的边界。
-        boundary = _safe_compaction_boundary(self.messages, len(self.messages) - self.keep_recent)
+        boundary = _safe_compaction_boundary(
+            self.messages, len(self.messages) - self.keep_recent
+        )
         if boundary <= 0:
             return False
         to_summarize = self.messages[:boundary]
@@ -145,9 +148,9 @@ def _flatten_messages(messages: list[MessageParam]) -> str:
         for block in content:
             if isinstance(block, dict):
                 if block["type"] == "text":
-                    lines.append(f'{role}: {block["text"]}')
+                    lines.append(f"{role}: {block['text']}")
                 elif block["type"] == "tool_use":
-                    lines.append(f'{role}: [调用工具 {block["name"]}]')
+                    lines.append(f"{role}: [调用工具 {block['name']}]")
                 elif block["type"] == "tool_result":
                     lines.append(f"{role}: [工具返回结果]")
                 continue

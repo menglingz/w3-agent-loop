@@ -55,6 +55,9 @@ class ToolPolicy:
             self.rules.update(rules)
         self.approver = approver
 
+    def action_for(self, permission: ToolPermission) -> PolicyAction:
+        return self.rules.get(permission, PolicyAction.DENY)
+
     def authorize(
         self,
         *,
@@ -63,7 +66,7 @@ class ToolPolicy:
         permission: ToolPermission,
         arguments: dict[str, Any],
     ) -> PolicyDecision:
-        action = self.rules.get(permission, PolicyAction.DENY)
+        action = self.action_for(permission)
         if action == PolicyAction.ALLOW:
             return PolicyDecision(True, f"策略允许 {permission.value} 权限")
         if action == PolicyAction.DENY:

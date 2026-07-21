@@ -12,10 +12,12 @@ from .base import Tool
 
 
 class NowArgs(BaseModel):
-    # 留一个可选参数演示带参工具；不传则用默认格式
+    # 网关对空参数工具调用的兼容性较差，因此要求模型显式传入格式。
     fmt: str = Field(
-        default="%Y-%m-%d %H:%M:%S",
-        description="strftime 格式串，默认 %Y-%m-%d %H:%M:%S",
+        description=(
+            "strftime 格式串；用户未指定格式时必须传入 "
+            "%Y-%m-%d %H:%M:%S"
+        )
     )
 
 
@@ -25,7 +27,11 @@ def _run(args: NowArgs) -> str:
 
 now_tool = Tool(
     name="now",
-    description="获取当前本地日期和时间。当问题涉及『现在』『今天』『当前时间』等实时信息时使用。",
+    description=(
+        "获取当前本地日期和时间。必须调用此工具，不能凭模型记忆回答。"
+        "调用时必须提供 fmt 参数；用户未指定格式时使用 "
+        "%Y-%m-%d %H:%M:%S。"
+    ),
     args_model=NowArgs,
     func=_run,
 )

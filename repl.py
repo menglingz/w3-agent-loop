@@ -3,6 +3,7 @@
 运行：python repl.py
 命令：/reset 清空记忆，/exit 退出。
 """
+
 from __future__ import annotations
 
 import sys
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import Agent, ApprovalRequest, ToolPolicy
+from agent import Agent, ApprovalRequest, ToolPolicy, console_event_listener
 
 
 # 引入 readline 以启用行编辑（方向键、历史、退格等）。导入即生效，无需直接调用。
@@ -46,9 +47,15 @@ def console_approve(request: ApprovalRequest) -> bool:
 
 def main() -> None:
 
-    agent = Agent(verbose=True, policy=ToolPolicy(approver=console_approve))
+    agent = Agent(
+        verbose=False,
+        policy=ToolPolicy(approver=console_approve),
+        listeners=[console_event_listener],
+    )
     print(f"🤖 Agent 已就绪，注册了 {len(agent.registry)} 个工具。")
-    print("   直接提问，Agent 会自行决定是否调用工具。输入 /exit 退出，/reset 清空记忆。\n")
+    print(
+        "   直接提问，Agent 会自行决定是否调用工具。输入 /exit 退出，/reset 清空记忆。\n"
+    )
 
     while True:
         try:
