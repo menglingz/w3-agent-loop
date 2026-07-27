@@ -42,8 +42,13 @@ def main() -> None:
             policy=ToolPolicy(approver=approve_demo_tool),
             listeners=[console_event_listener],
         )  # 每个任务独立 Agent，避免上下文串味
-        answer = agent.run(task)
-        print(f"\n✅ 最终答案：{answer}\n")
+        result = agent.run_with_result(task)
+        print(f"\n✅ 最终答案：{result.answer}")
+        print(
+            f"   终止原因: {result.termination_reason.value} | "
+            f"模型请求: {result.model_attempts} | 工具调用: {result.tool_calls} | "
+            f"tokens: {result.total_tokens}\n"
+        )
 
 
 if __name__ == "__main__":

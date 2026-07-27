@@ -49,6 +49,8 @@ list_dir_tool = Tool(
     description="列出 workspace 沙箱目录下的文件和子目录。",
     args_model=ListDirArgs,
     func=_list_dir,
+    idempotent=True,
+    retryable=True,
 )
 
 
@@ -73,6 +75,8 @@ read_file_tool = Tool(
     description="读取 workspace 沙箱内某个文本文件的内容。",
     args_model=ReadFileArgs,
     func=_read_file,
+    idempotent=True,
+    retryable=True,
 )
 
 

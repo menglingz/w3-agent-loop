@@ -52,4 +52,5 @@ calculator_tool = Tool(
     description="执行一个算术表达式并返回精确结果。当需要精确计算（尤其大数或多步运算）时使用。",
     args_model=CalculatorArgs,
     func=_run,
+    idempotent=True,
 )

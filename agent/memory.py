@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 import anthropic
@@ -46,7 +47,10 @@ class ConversationMemory:
         """追加一条消息（content 可以是字符串或 content block 列表）。"""
         self.messages.append({"role": role, "content": content})
 
-    def maybe_compact(self) -> bool:
+    def maybe_compact(
+        self,
+        summarizer: Callable[[str], str] | None = None,
+    ) -> bool:
         """超过阈值时压缩较早的消息。
 
         Returns:
@@ -66,7 +70,8 @@ class ConversationMemory:
 
         # 把旧消息拍平成纯文本喂给模型做摘要
         transcript = _flatten_messages(to_summarize)
-        summary = self._summarize(transcript)
+        summarize = summarizer or self._summarize
+        summary = summarize(transcript)
 
         # 用一条 user 消息承载摘要，替换掉一大段历史
         compacted: list[MessageParam] = [

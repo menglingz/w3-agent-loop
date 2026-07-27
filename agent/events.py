@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Mapping
+from typing import Any
 
 
 class EventType(str, Enum):
@@ -15,12 +16,17 @@ class EventType(str, Enum):
     MODEL_RESPONSE_RECEIVED = "model_response_received"
     MODEL_TEXT_RECEIVED = "model_text_received"
     MODEL_RESPONSE_INVALID = "model_response_invalid"
+    MODEL_RETRY_SCHEDULED = "model_retry_scheduled"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
     TOOL_CALL_STARTED = "tool_call_started"
     TOOL_CALL_FINISHED = "tool_call_finished"
     TOOL_CALL_FAILED = "tool_call_failed"
+    TOOL_CALL_TIMED_OUT = "tool_call_timed_out"
+    TOOL_RETRY_SCHEDULED = "tool_retry_scheduled"
     CONTEXT_COMPACTED = "context_compacted"
+    RUN_LIMIT_REACHED = "run_limit_reached"
+    RUN_CANCELLED = "run_cancelled"
     RUN_FINISHED = "run_finished"
     RUN_FAILED = "run_failed"
 
@@ -37,6 +43,8 @@ class AgentEvent:
     output_summary: str | None = None
     error: str | None = None
     duration_ms: float | None = None
+    attempt: int | None = None
+    termination_reason: str | None = None
 
 
 EventListener = Callable[[AgentEvent], None]
@@ -98,13 +106,23 @@ def summarize_for_event(
 
 
 def console_event_listener(event: AgentEvent) -> None:
-    """把结构化事件渲染成原有教学风格的终端日志。"""
+    """把结构化事件渲染成终端教学日志。"""
     if event.event_type == EventType.MODEL_TEXT_RECEIVED and event.output_summary:
         print(f"💭 {event.output_summary}")
+    elif event.event_type == EventType.MODEL_REQUESTED:
+        attempt = f"，请求尝试 {event.attempt}" if event.attempt and event.attempt > 1 else ""
+        print(f"当前执行轮数: {event.step}{attempt}")
+    elif event.event_type == EventType.MODEL_RETRY_SCHEDULED:
+        print(f"↻ 模型请求失败，{event.output_summary}：{event.error}")
     elif event.event_type == EventType.TOOL_CALL_STARTED:
-        print(f"🔧 工具调用开始 {event.tool_name}({event.input_summary})")
+        attempt = f"，尝试 {event.attempt}" if event.attempt and event.attempt > 1 else ""
+        print(f"🔧 调用 {event.tool_name}({event.input_summary}){attempt}")
     elif event.event_type == EventType.TOOL_CALL_FINISHED:
         print(f"  工具调用完成 ↳ {event.output_summary}")
+    elif event.event_type == EventType.TOOL_CALL_TIMED_OUT:
+        print(f"⌛ 工具调用超时：{event.error}")
+    elif event.event_type == EventType.TOOL_RETRY_SCHEDULED:
+        print(f"↻ 工具 {event.tool_name} 失败，{event.output_summary}")
     elif event.event_type == EventType.TOOL_CALL_FAILED:
         icon = "🔒" if event.error and "拒绝" in event.error else "⚠️ "
         print(f"{icon}工具调用失败： {event.error or event.output_summary}")
@@ -112,5 +130,7 @@ def console_event_listener(event: AgentEvent) -> None:
         print(f"⚠️  {event.error}")
     elif event.event_type == EventType.CONTEXT_COMPACTED:
         print("🗜️  上下文较长，已自动摘要压缩早期对话")
-    elif event.event_type == EventType.MODEL_REQUESTED:
-        print(f"当前执行轮数: {event.step}")
+    elif event.event_type == EventType.RUN_LIMIT_REACHED:
+        print(f"⛔ 运行终止（{event.termination_reason}）：{event.error}")
+    elif event.event_type == EventType.RUN_CANCELLED:
+        print("⏹️  运行已取消")

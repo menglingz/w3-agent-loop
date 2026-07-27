@@ -55,4 +55,6 @@ search_tool = Tool(
     args_model=SearchArgs,
     func=_run,
     permission=ToolPermission.NETWORK,
+    idempotent=True,
+    retryable=True,
 )

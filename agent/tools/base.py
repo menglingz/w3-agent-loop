@@ -9,10 +9,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Generic, TypeVar
-
+from typing import Any, Generic, TypeVar
 
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ValidationError
@@ -31,10 +31,21 @@ class ToolPermission(str, Enum):
     SENSITIVE = "sensitive"
 
 
+class ToolFailureKind(str, Enum):
+    """工具失败类别，用于决定是否允许自动重试。"""
+
+    VALIDATION = "validation"
+    EXECUTION = "execution"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    LIMIT = "limit"
+
+
 @dataclass(frozen=True)
 class ToolExecutionResult:
     ok: bool
     content: str
+    failure_kind: ToolFailureKind | None = None
 
 
 class Tool(Generic[A]):
@@ -46,6 +57,8 @@ class Tool(Generic[A]):
         args_model: 描述参数的 pydantic 模型，用于生成 schema 和校验。
         func: 真正的本地实现，接收校验后的参数模型实例，返回字符串结果。
         permission: 工具需要的权限类别，默认是只读。
+        idempotent: 使用相同参数重复执行是否不会产生额外副作用。
+        retryable: 发生运行异常时是否允许 Agent 自动重试。
     """
 
     def __init__(
@@ -55,12 +68,19 @@ class Tool(Generic[A]):
         args_model: type[A],
         func: Callable[[A], str],
         permission: ToolPermission = ToolPermission.READ,
+        *,
+        idempotent: bool = False,
+        retryable: bool = False,
     ) -> None:
         self.name = name
         self.description = description
         self.args_model = args_model
         self.func = func
         self.permission = permission
+        self.idempotent = idempotent
+        self.retryable = retryable
+        if retryable and not idempotent:
+            raise ValueError("只有幂等工具才能开启自动重试")
 
     def to_anthropic_schema(self) -> ToolParam:
         """转成 Anthropic tools 数组里需要的声明格式。
@@ -85,11 +105,16 @@ class Tool(Generic[A]):
             return ToolExecutionResult(
                 False,
                 f"参数校验失败：{e.errors()}。请修正参数后重试。",
+                ToolFailureKind.VALIDATION,
             )
         try:
             return ToolExecutionResult(True, self.func(args))
         except Exception as e:  # 工具内部异常回传给模型，而非让整个 Loop 崩溃
-            return ToolExecutionResult(False, f"工具执行出错：{type(e).__name__}: {e}")
+            return ToolExecutionResult(
+                False,
+                f"工具执行出错：{type(e).__name__}: {e}",
+                ToolFailureKind.EXECUTION,
+            )
 
     def run(self, raw_input: dict[str, Any]) -> str:
         """兼容原接口：只返回可直接回填模型的字符串。"""

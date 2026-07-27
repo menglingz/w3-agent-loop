@@ -12,12 +12,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import Agent, ApprovalRequest, ToolPolicy, console_event_listener
-
+from agent import (
+    Agent,
+    ApprovalRequest,
+    TerminationReason,
+    ToolPolicy,
+    console_event_listener,
+)
 
 # 引入 readline 以启用行编辑（方向键、历史、退格等）。导入即生效，无需直接调用。
 try:
-    import readline  # noqa: F401
+    import readline
 except ImportError:  # 某些平台（如 Windows 原生）无此模块，忽略即可
     readline = None
 
@@ -74,8 +79,16 @@ def main() -> None:
             continue
 
         try:
-            answer = agent.run(user)
-            print(f"\n✅ {answer}\n")
+            result = agent.run_with_result(user)
+            if result.termination_reason == TerminationReason.SYSTEM_ERROR:
+                print(f"\n⚠️ 出错：{result.error}\n", file=sys.stderr)
+            else:
+                print(f"\n✅ {result.answer}")
+                print(
+                    f"   终止原因: {result.termination_reason.value} | "
+                    f"模型请求: {result.model_attempts} | 工具调用: {result.tool_calls} | "
+                    f"tokens: {result.total_tokens}\n"
+                )
         except Exception as e:  # 顶层兜底，单轮出错不退出程序
             print(f"\n⚠️ 出错：{type(e).__name__}: {e}\n", file=sys.stderr)
 

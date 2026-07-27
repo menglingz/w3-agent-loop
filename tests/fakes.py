@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Any, Iterable
+from typing import Any
 
 
 def text_block(text: str) -> SimpleNamespace:
@@ -24,8 +25,24 @@ def tool_use_block(
     )
 
 
-def response(stop_reason: str, *blocks: SimpleNamespace) -> SimpleNamespace:
-    return SimpleNamespace(stop_reason=stop_reason, content=list(blocks))
+def response(
+    stop_reason: str,
+    *blocks: SimpleNamespace,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        stop_reason=stop_reason,
+        content=list(blocks),
+        usage=SimpleNamespace(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+        ),
+    )
 
 
 class FakeMessages:

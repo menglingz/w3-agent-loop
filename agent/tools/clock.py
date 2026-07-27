@@ -34,4 +34,5 @@ now_tool = Tool(
     ),
     args_model=NowArgs,
     func=_run,
+    idempotent=True,
 )

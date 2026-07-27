@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -304,7 +305,7 @@ def test_compaction_event_is_between_text_and_finish(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent, _, events = make_agent([response("end_turn", text_block("完成"))])
-    monkeypatch.setattr(agent.memory, "maybe_compact", lambda: True)
+    monkeypatch.setattr(agent.memory, "maybe_compact", lambda summarizer=None: True)
 
     assert agent.run("压缩") == "完成"
     types = event_types(events)
